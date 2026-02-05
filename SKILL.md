@@ -280,6 +280,7 @@ Intercom must expose and describe all interactive commands so agents can operate
 - **Diagnostics:** use `--sidechannel-debug 1` and `/sc_stats` to confirm connection counts and message flow.
 - **Dynamic channel requests**: `/sc_open` posts a request in the entry channel; you can auto‑join with `--sidechannel-auto-join 1`.
 - **Invites**: uses the **peer pubkey** (transport identity). Invites may also include the inviter’s **trac address** for payments, but verification is by peer pubkey.
+- **Invite delivery**: the invite is a signed JSON/base64 blob. You can deliver it via `0000intercom` **or** out‑of‑band (email, website, QR, etc.).
 - **Welcome**: required for **all** sidechannels (public + invite‑only). Configure `--sidechannel-owner` on **every peer** that should accept a channel, and distribute the owner‑signed welcome via `--sidechannel-welcome` (or include it in `/sc_open` / `/sc_invite`).
 
 ### Signed Welcome (Required)

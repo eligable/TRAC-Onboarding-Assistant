@@ -97,6 +97,7 @@ class Sidechannel extends Feature {
     this.inviterKeys = inviterKeys.length > 0 ? new Set(inviterKeys) : null;
     this.inviteTtlMs = Number.isSafeInteger(config.inviteTtlMs) ? config.inviteTtlMs : 0;
     this.invitedPeers = new Map();
+    this.localInvites = new Map();
     this.welcomeRequired = config.welcomeRequired !== false;
     this.ownerKeys = new Map();
     const ownerEntries = config.ownerKeys instanceof Map
@@ -129,6 +130,9 @@ class Sidechannel extends Feature {
       }
     }
     this.welcomedChannels = new Set();
+    for (const [channel, welcome] of this.welcomeByChannel.entries()) {
+      this._verifyWelcome(welcome, channel, null);
+    }
     const selfKey = normalizeKeyHex(this.peer?.wallet?.publicKey);
     if (selfKey) {
       for (const [channel, key] of this.ownerKeys.entries()) {
@@ -249,11 +253,15 @@ class Sidechannel extends Feature {
     if (!target) return false;
     const via = String(viaChannel || this.entryChannel || '').trim();
     if (!via) return false;
+    if (invite) this._acceptLocalInvite(invite, target);
+    const inviteWelcome = invite?.welcome;
+    const desiredWelcome = welcome || inviteWelcome;
+    if (desiredWelcome) this._verifyWelcome(desiredWelcome, target, null);
     return this.broadcast(via, {
       control: 'open_channel',
       channel: target,
       invite: invite || undefined,
-      welcome: welcome || undefined,
+      welcome: desiredWelcome || undefined,
     });
   }
 
@@ -314,6 +322,25 @@ class Sidechannel extends Feature {
     map.set(pubkey, expiresAt);
   }
 
+  _rememberLocalInvite(channel, expiresAt) {
+    if (!Number.isFinite(expiresAt)) return;
+    this.localInvites.set(normalizeChannel(channel), expiresAt);
+  }
+
+  _isLocallyInvited(channel) {
+    const key = normalizeChannel(channel);
+    const expiresAt = this.localInvites.get(key);
+    if (!Number.isFinite(expiresAt)) {
+      this.localInvites.delete(key);
+      return false;
+    }
+    if (expiresAt <= this._now()) {
+      this.localInvites.delete(key);
+      return false;
+    }
+    return true;
+  }
+
   _normalizeInvitePayload(payload) {
     return {
       channel: String(payload?.channel ?? ''),
@@ -327,15 +354,14 @@ class Sidechannel extends Feature {
     };
   }
 
-  _verifyInvite(invite, channel, connection) {
+  _verifyInviteForKey(invite, channel, inviteeKey) {
     if (!invite || typeof invite !== 'object') return false;
     const payload = invite.payload && typeof invite.payload === 'object' ? invite.payload : invite;
     const sigHex = invite.sig || invite.signature;
     if (typeof sigHex !== 'string' || sigHex.length === 0) return false;
     const normalized = this._normalizeInvitePayload(payload);
     if (normalized.channel !== String(channel)) return false;
-    const remoteKey = this._getRemoteKey(connection);
-    if (normalized.inviteePubKey !== remoteKey) return false;
+    if (normalized.inviteePubKey !== inviteeKey) return false;
     if (!normalized.inviterPubKey || normalized.inviterPubKey.length === 0) return false;
     if (this.inviterKeys && !this.inviterKeys.has(normalized.inviterPubKey)) return false;
     if (!Number.isFinite(normalized.issuedAt) || !Number.isFinite(normalized.expiresAt)) return false;
@@ -350,12 +376,35 @@ class Sidechannel extends Feature {
       return false;
     }
     if (!PeerWallet.verify(sigBuf, b4a.from(message), pubBuf)) return false;
+    return normalized;
+  }
+
+  _verifyInvite(invite, channel, connection) {
+    const remoteKey = this._getRemoteKey(connection);
+    const normalized = this._verifyInviteForKey(invite, channel, remoteKey);
+    if (!normalized) return false;
     this._rememberInvite(channel, remoteKey, normalized.expiresAt);
+    return true;
+  }
+
+  _acceptLocalInvite(invite, channel) {
+    const selfKey = normalizeKeyHex(this.peer?.wallet?.publicKey);
+    if (!selfKey) return false;
+    const normalized = this._verifyInviteForKey(invite, channel, selfKey);
+    if (!normalized) return false;
+    this._rememberLocalInvite(channel, normalized.expiresAt);
+    const embeddedWelcome = invite?.welcome;
+    if (embeddedWelcome) {
+      this._verifyWelcome(embeddedWelcome, channel, null);
+    }
     return true;
   }
 
   _checkInvite(payload, channel, connection) {
     if (!this._inviteRequired(channel)) return true;
+    const selfKey = normalizeKeyHex(this.peer?.wallet?.publicKey);
+    const selfIsInviter = this.inviterKeys && selfKey && this.inviterKeys.has(selfKey);
+    if (!selfIsInviter && !this._isLocallyInvited(channel)) return false;
     const remoteKey = this._getRemoteKey(connection);
     if (this.inviterKeys && this.inviterKeys.has(remoteKey)) return true;
     if (this._isInvited(channel, remoteKey)) return true;
@@ -707,6 +756,12 @@ class Sidechannel extends Feature {
   broadcast(name, message, options = {}) {
     const channel = String(name || '').trim();
     if (!channel) return false;
+    if (options.invite) {
+      this._acceptLocalInvite(options.invite, channel);
+      if (options.invite?.welcome) {
+        this._verifyWelcome(options.invite.welcome, channel, null);
+      }
+    }
     const entry = this._registerChannel(channel);
     if (!entry) return false;
     if (this.peer?.swarm?.connections) {
