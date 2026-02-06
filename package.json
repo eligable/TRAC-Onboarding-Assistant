@@ -16,6 +16,7 @@
     "@solana/web3.js": "^1.98.4",
     "b4a": "^1.6.7",
     "bare-ws": "2.0.3",
+    "bech32": "^2.0.0",
     "compact-encoding": "^2.18.0",
     "crypto": "npm:bare-node-crypto",
     "fs": "npm:bare-node-fs",
