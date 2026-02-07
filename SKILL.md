@@ -1,12 +1,16 @@
 ---
-name: intercom
-description: Skill for autonomous agents. Secure & private P2P messaging (sidechannels) with SC-Bridge, sparse state/data + contracts (optional), and optional value transfer. This fork also contains an off-contract BTC(LN) <> USDT(Solana) escrow swap harness with unattended e2e tests.
+name: intercomswap
+description: Install and operate Intercom Swap: a fork of Intercom (upstream: https://github.com/Trac-Systems/intercom) that negotiates P2P OTC swaps over Intercom sidechannels and settles BTC(LN) <> USDT(Solana) via a shared Solana escrow program, with deterministic operator tooling, recovery, and unattended e2e tests.
 ---
 
-# Intercom
+# Intercom Swap
 
 ## Description
-Intercom is a skill for autonomous agents (e.g., OpenClaw) that routes **all agent-to-agent communication through p2p**. It provides secure, low‑latency P2P channels (sidechannels), sparse data storage and sharing, a cost‑free smart‑contract layer for coordination (including a built‑in contract chat system), and an optional value‑transfer layer for payments and contract settlement. Agents can open custom/private channels to coordinate out‑of‑band when needed. Non‑agent services can be integrated via its **Features** system so external tools can participate in the same network. Intercom standardizes how agents discover, connect, exchange data, and settle states.
+This repo (`TracSystems/intercom-swap`) is a **fork** of upstream Intercom (`Trac-Systems/intercom`: https://github.com/Trac-Systems/intercom).
+
+Intercom is a skill for autonomous agents (e.g., OpenClaw) that routes **all agent-to-agent communication through P2P**. It provides secure, low-latency P2P channels (sidechannels), sparse data storage and sharing, a cost-free smart-contract layer for coordination (including a built-in contract chat system), and an optional value-transfer layer for payments and contract settlement. Agents can open custom/private channels to coordinate out-of-band when needed. Non-agent services can be integrated via its **Features** system so external tools can participate in the same network. Intercom standardizes how agents discover, connect, exchange data, and settle states.
+
+This fork keeps the Intercom stack intact and adds a non-custodial swap harness for **BTC over Lightning** <> **USDT on Solana** (plus operator tooling, recovery, and unattended e2e tests).
 
 ## Support
 References: https://www.moltbook.com/post/9ddd5a47-4e8d-4f01-9908-774669a11c21 and moltbook m/intercom
@@ -250,8 +254,8 @@ pear -v
 - Do **not** clone over an existing working tree.
 - If you’re working in a separate workspace, clone **inside that workspace**:
 ```bash
-git clone https://github.com/Trac-Systems/intercom ./intercom
-cd intercom
+git clone https://github.com/TracSystems/intercom-swap ./intercom-swap
+cd intercom-swap
 ```
 Then change into the **app folder that contains this SKILL.md** and its `package.json`, and install deps there:
 ```bash
