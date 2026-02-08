@@ -15,6 +15,7 @@ promptctl (client for promptd)
 
 Flags:
   --url <http://127.0.0.1:9333>      (default: http://127.0.0.1:9333)
+  --auth-token <token>               (optional; if promptd server.auth_token is set)
   --prompt <text>                    (required)
   --session-id <id>                  (optional)
   --auto-approve 0|1                 (optional)
@@ -51,11 +52,16 @@ function parseBoolFlag(value, fallback = false) {
   return ['1', 'true', 'yes', 'on'].includes(s);
 }
 
-function requestJson(url, body) {
+function requestJson(url, body, { authToken = '' } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const isHttps = u.protocol === 'https:';
     const data = JSON.stringify(body);
+    const headers = {
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': Buffer.byteLength(data),
+    };
+    if (authToken) headers.authorization = `Bearer ${authToken}`;
     const req = (isHttps ? https : http).request(
       {
         protocol: u.protocol,
@@ -63,10 +69,7 @@ function requestJson(url, body) {
         port: u.port,
         path: u.pathname,
         method: 'POST',
-        headers: {
-          'content-type': 'application/json; charset=utf-8',
-          'content-length': Buffer.byteLength(data),
-        },
+        headers,
       },
       (res) => {
         const chunks = [];
@@ -95,6 +98,7 @@ async function main() {
   }
 
   const base = String(flags.get('url') || 'http://127.0.0.1:9333').trim().replace(/\/+$/, '');
+  const authToken = flags.get('auth-token') ? String(flags.get('auth-token')).trim() : '';
   const prompt = flags.get('prompt') ? String(flags.get('prompt')) : '';
   if (!prompt.trim()) die('Missing --prompt');
 
@@ -106,10 +110,9 @@ async function main() {
   if (flags.has('dry-run')) body.dry_run = parseBoolFlag(flags.get('dry-run'), false);
   if (flags.get('max-steps')) body.max_steps = Number.parseInt(String(flags.get('max-steps')), 10);
 
-  const { status, json } = await requestJson(`${base}/v1/run`, body);
+  const { status, json } = await requestJson(`${base}/v1/run`, body, { authToken });
   if (status >= 400) die(json?.error || `HTTP ${status}`);
   process.stdout.write(`${JSON.stringify(json, null, 2)}\n`);
 }
 
 main().catch((err) => die(err?.message ?? String(err)));
-

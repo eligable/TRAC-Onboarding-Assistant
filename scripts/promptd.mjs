@@ -1,8 +1,11 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { URL } from 'node:url';
 
 import { PromptRouter } from '../src/prompt/router.js';
 import { ToolExecutor } from '../src/prompt/executor.js';
@@ -68,6 +71,11 @@ function json(res, status, body) {
   res.end(text);
 }
 
+function parseUrl(req) {
+  // req.url may include query string. Use a fixed base.
+  return new URL(String(req.url || '/'), 'http://127.0.0.1');
+}
+
 async function readJsonBody(req) {
   const chunks = [];
   for await (const c of req) chunks.push(c);
@@ -78,6 +86,46 @@ async function readJsonBody(req) {
   } catch (_e) {
     throw new Error('Invalid JSON body');
   }
+}
+
+function requireAuth(req, setup) {
+  const token = String(setup?.server?.authToken || '').trim();
+  if (!token) return true;
+  const auth = req.headers?.authorization;
+  if (typeof auth !== 'string') return false;
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) return false;
+  return String(m[1] || '').trim() === token;
+}
+
+function ndjsonHeaders(res, status = 200) {
+  res.writeHead(status, {
+    'content-type': 'application/x-ndjson; charset=utf-8',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+}
+
+async function writeNdjson(res, obj) {
+  const line = `${JSON.stringify(obj)}\n`;
+  const ok = res.write(line);
+  if (ok) return;
+  await new Promise((resolve) => res.once('drain', resolve));
+}
+
+function parseCsvParam(value) {
+  const s = String(value || '').trim();
+  if (!s) return [];
+  return s
+    .split(',')
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+}
+
+function parseIntParam(value, fallback = 0) {
+  if (value === null || value === undefined) return fallback;
+  const n = Number.parseInt(String(value).trim(), 10);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 async function main() {
@@ -123,11 +171,17 @@ async function main() {
             host: '127.0.0.1',
             port: 9333,
             audit_dir: 'onchain/prompt/audit',
+            // Optional HTTP auth for running promptd behind ngrok / on a LAN.
+            // If set, all /v1/* endpoints require: Authorization: Bearer <token>
+            auth_token: '',
             auto_approve_default: false,
             max_steps: 12,
             // If the model returns invalid structured output (eg, plans instead of tool calls),
             // promptd will ask it to re-emit valid JSON up to this many times.
             max_repairs: 2,
+            // Optional TLS (HTTPS). If set, promptd serves https:// instead of http://.
+            // tls: { key: 'onchain/prompt/server.key', cert: 'onchain/prompt/server.crt' }
+            tls: null,
           },
           sc_bridge: {
             url: 'ws://127.0.0.1:49222',
@@ -182,10 +236,17 @@ async function main() {
     agentRole: setup.agent?.role || '',
   });
 
-  const server = http.createServer(async (req, res) => {
+  const handler = async (req, res) => {
     try {
       const method = req.method || 'GET';
-      const url = String(req.url || '/');
+      const u = parseUrl(req);
+      const url = u.pathname;
+
+      if (url.startsWith('/v1/') && !requireAuth(req, setup)) {
+        res.writeHead(401, { 'content-type': 'application/json; charset=utf-8', 'www-authenticate': 'Bearer' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+        return;
+      }
 
       if (method === 'GET' && url === '/healthz') {
         json(res, 200, { ok: true });
@@ -213,11 +274,120 @@ async function main() {
         return;
       }
 
+      if (method === 'POST' && url === '/v1/run/stream') {
+        const body = await readJsonBody(req);
+        const prompt = String(body.prompt ?? '').trim();
+        const sessionId = body.session_id ? String(body.session_id).trim() : null;
+        const autoApprove =
+          body.auto_approve === undefined || body.auto_approve === null
+            ? setup.server.autoApproveDefault
+            : Boolean(body.auto_approve);
+        const dryRun = Boolean(body.dry_run);
+        const maxSteps = body.max_steps !== undefined && body.max_steps !== null ? Number(body.max_steps) : null;
+
+        ndjsonHeaders(res, 200);
+        const ac = new AbortController();
+        req.on('close', () => ac.abort(new Error('client_closed')));
+
+        try {
+          const out = await router.run({
+            prompt,
+            sessionId,
+            autoApprove,
+            dryRun,
+            maxSteps,
+            signal: ac.signal,
+            emit: async (evt) => writeNdjson(res, evt),
+          });
+          await writeNdjson(res, { type: 'done', session_id: out.session_id });
+        } catch (err) {
+          await writeNdjson(res, { type: 'error', error: err?.message ?? String(err) });
+        } finally {
+          res.end();
+        }
+        return;
+      }
+
+      if (method === 'GET' && url === '/v1/sc/stream') {
+        // NDJSON stream of sidechannel events received via SC-Bridge.
+        // Query params:
+        //   channels=<csv>   optional filter + auto-subscribe
+        //   since=<seq>      optional cursor (default 0)
+        //   backlog=<n>      max backlog events to send on connect (default 250)
+        const channels = parseCsvParam(u.searchParams.get('channels'));
+        const since = Math.max(0, parseIntParam(u.searchParams.get('since'), 0));
+        const backlog = Math.max(1, Math.min(2000, parseIntParam(u.searchParams.get('backlog'), 250)));
+
+        ndjsonHeaders(res, 200);
+        req.on('close', () => {
+          try {
+            res.end();
+          } catch (_e) {}
+        });
+
+        // Ensure SC-Bridge is connected and subscribed.
+        await executor.scEnsureConnected({ timeoutMs: 10_000 });
+        if (channels.length > 0) {
+          await executor.execute('intercomswap_sc_subscribe', { channels }, { autoApprove: false, dryRun: false });
+        }
+
+        const info = executor.scLogInfo();
+        // Avoid clobbering `type` from the info object.
+        await writeNdjson(res, { type: 'sc_stream_open', info });
+
+        let cursor = since;
+        // Backlog read (bounded).
+        const first = executor.scLogRead({ sinceSeq: cursor, limit: backlog, channels: channels.length > 0 ? channels : null });
+        if (first.oldest_seq !== null && cursor < first.oldest_seq - 1) {
+          await writeNdjson(res, {
+            type: 'sc_gap',
+            requested_since: cursor,
+            oldest_seq: first.oldest_seq,
+            latest_seq: first.latest_seq,
+          });
+        }
+        for (const e of first.events) {
+          // Avoid clobbering `type` from the event object (`sidechannel_message`).
+          const { type: _t, ...rest } = e || {};
+          await writeNdjson(res, { type: 'sc_event', ...rest });
+          cursor = Math.max(cursor, e.seq);
+        }
+
+        // Tail live events.
+        while (!res.writableEnded) {
+          const woke = await executor.scLogWait({ sinceSeq: cursor, timeoutMs: 15_000 });
+          if (!woke) {
+            await writeNdjson(res, { type: 'heartbeat', ts: Date.now() });
+            continue;
+          }
+          const slice = executor.scLogRead({ sinceSeq: cursor, limit: 500, channels: channels.length > 0 ? channels : null });
+          for (const e of slice.events) {
+            const { type: _t, ...rest } = e || {};
+            await writeNdjson(res, { type: 'sc_event', ...rest });
+            cursor = Math.max(cursor, e.seq);
+          }
+        }
+        return;
+      }
+
       json(res, 404, { error: 'not_found' });
     } catch (err) {
       json(res, 400, { error: err?.message ?? String(err) });
     }
-  });
+  };
+
+  const tls = setup.server.tls;
+  const server = tls
+    ? https.createServer(
+        {
+          key: fs.readFileSync(tls.keyPath),
+          cert: fs.readFileSync(tls.certPath),
+          ...(tls.caPath ? { ca: fs.readFileSync(tls.caPath) } : {}),
+          ...(tls.passphrase ? { passphrase: tls.passphrase } : {}),
+        },
+        handler
+      )
+    : http.createServer(handler);
 
   server.listen(setup.server.port, setup.server.host, () => {
     process.stdout.write(
@@ -227,6 +397,7 @@ async function main() {
           config: setup.configPath,
           host: setup.server.host,
           port: setup.server.port,
+          tls: Boolean(tls),
           audit_dir: setup.server.auditDir,
           llm: { base_url: setup.llm.baseUrl, model: setup.llm.model, tool_format: setup.llm.toolFormat },
         },

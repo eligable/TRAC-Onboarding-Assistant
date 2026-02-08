@@ -327,6 +327,11 @@ export class ToolExecutor {
     this._scWaiters = new Set(); // { filter, resolve, reject, timer }
     this._scQueue = [];
     this._scQueueMax = 500;
+    // Append-only-ish ring buffer for UI/event streaming (does not interfere with _scQueue consumers).
+    this._scSeq = 0;
+    this._scLog = []; // [{...evt, seq}]
+    this._scLogMax = 2000;
+    this._scLogWaiters = new Set(); // { sinceSeq, resolve, timer }
 
     this._peerSigning = null; // { pubHex, secHex }
     this._solanaKeypair = null;
@@ -422,6 +427,10 @@ export class ToolExecutor {
     return this._scConnecting;
   }
 
+  async scEnsureConnected({ timeoutMs = 10_000 } = {}) {
+    return this._scEnsurePersistent({ timeoutMs });
+  }
+
   _onScEvent(msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type !== 'sidechannel_message') return;
@@ -440,6 +449,23 @@ export class ToolExecutor {
       message: msg.message,
     };
 
+    // Append to streaming log with a monotonic seq (do not remove on consumption).
+    this._scSeq += 1;
+    const logEvt = { ...evt, seq: this._scSeq };
+    this._scLog.push(logEvt);
+    if (this._scLog.length > this._scLogMax) {
+      this._scLog.splice(0, this._scLog.length - this._scLogMax);
+    }
+    for (const waiter of this._scLogWaiters) {
+      try {
+        if (this._scSeq > waiter.sinceSeq) {
+          this._scLogWaiters.delete(waiter);
+          clearTimeout(waiter.timer);
+          waiter.resolve(true);
+        }
+      } catch (_e) {}
+    }
+
     // Deliver directly to a waiter (consume once), otherwise enqueue.
     for (const waiter of this._scWaiters) {
       try {
@@ -456,6 +482,59 @@ export class ToolExecutor {
     if (this._scQueue.length > this._scQueueMax) {
       this._scQueue.splice(0, this._scQueue.length - this._scQueueMax);
     }
+  }
+
+  scLogInfo() {
+    const oldest = this._scLog.length > 0 ? this._scLog[0].seq : null;
+    return {
+      type: 'sc_log_info',
+      subscribed_channels: Array.from(this._scSubscribed),
+      oldest_seq: oldest,
+      latest_seq: this._scSeq,
+      size: this._scLog.length,
+      max_size: this._scLogMax,
+    };
+  }
+
+  scLogRead({ sinceSeq = 0, limit = 500, channels = null } = {}) {
+    const since = Number.isFinite(sinceSeq) ? Math.max(0, Math.trunc(sinceSeq)) : 0;
+    const lim = Number.isFinite(limit) ? Math.max(1, Math.min(5000, Math.trunc(limit))) : 500;
+    const chanSet =
+      Array.isArray(channels) && channels.length > 0
+        ? new Set(channels.map((c) => normalizeChannelName(String(c))))
+        : null;
+
+    const events = [];
+    for (const e of this._scLog) {
+      if (!e || typeof e !== 'object') continue;
+      if (e.seq <= since) continue;
+      if (chanSet && !chanSet.has(e.channel)) continue;
+      events.push(e);
+      if (events.length >= lim) break;
+    }
+
+    const oldest = this._scLog.length > 0 ? this._scLog[0].seq : null;
+    return {
+      type: 'sc_log_read',
+      since_seq: since,
+      oldest_seq: oldest,
+      latest_seq: this._scSeq,
+      events,
+    };
+  }
+
+  async scLogWait({ sinceSeq = 0, timeoutMs = 15_000 } = {}) {
+    const since = Number.isFinite(sinceSeq) ? Math.max(0, Math.trunc(sinceSeq)) : 0;
+    const to = Number.isFinite(timeoutMs) ? Math.max(1, Math.min(120_000, Math.trunc(timeoutMs))) : 15_000;
+    if (this._scSeq > since) return true;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this._scLogWaiters.delete(waiter);
+        resolve(false);
+      }, to);
+      const waiter = { sinceSeq: since, resolve, timer };
+      this._scLogWaiters.add(waiter);
+    });
   }
 
   async _scWaitFor(filterFn, { timeoutMs = 10_000 } = {}) {

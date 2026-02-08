@@ -28,6 +28,10 @@ function normalizeApiKey(value) {
   return s;
 }
 
+function normalizeOptionalToken(value) {
+  return normalizeApiKey(value);
+}
+
 function parseIntLike(value, fallback = null) {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
@@ -112,15 +116,30 @@ export const DEFAULT_PROMPT_SETUP_PATH = 'onchain/prompt/setup.json';
   if (!llm.model) throw new Error(`Missing llm.model in ${resolved}`);
 
   const serverRaw = isObject(raw.server) ? raw.server : {};
+  const tlsRaw = isObject(serverRaw.tls) ? serverRaw.tls : null;
   const server = {
     host: normalizeString(serverRaw.host, { allowEmpty: true }) || '127.0.0.1',
     port: parseIntLike(serverRaw.port, 9333) ?? 9333,
     auditDir: resolvePath(baseDir, serverRaw.audit_dir || 'onchain/prompt/audit'),
+    authToken: normalizeOptionalToken(serverRaw.auth_token),
     autoApproveDefault: Boolean(serverRaw.auto_approve_default),
     maxSteps: parseIntLike(serverRaw.max_steps, 12) ?? 12,
     maxRepairs: parseIntLike(serverRaw.max_repairs, 2) ?? 2,
+    tls: tlsRaw
+      ? {
+          keyPath: resolvePath(baseDir, tlsRaw.key || ''),
+          certPath: resolvePath(baseDir, tlsRaw.cert || ''),
+          caPath: resolvePath(baseDir, tlsRaw.ca || ''),
+          passphrase: normalizeString(tlsRaw.passphrase, { allowEmpty: true }) || '',
+        }
+      : null,
   };
   if (!Number.isFinite(server.port) || server.port <= 0) throw new Error(`Invalid server.port in ${resolved}`);
+  if (server.tls) {
+    if (!server.tls.keyPath || !server.tls.certPath) {
+      throw new Error(`server.tls requires both tls.key and tls.cert in ${resolved}`);
+    }
+  }
 
   const scRaw = isObject(raw.sc_bridge) ? raw.sc_bridge : {};
   const scBridge = {

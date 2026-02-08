@@ -351,13 +351,19 @@ export class PromptRouter {
     autoApprove = false,
     dryRun = false,
     maxSteps = null,
+    emit = null,
+    signal = null,
   }) {
     const p = String(prompt ?? '').trim();
     if (!p) throw new Error('prompt is required');
+    if (signal?.aborted) throw signal.reason || new Error('aborted');
 
     const { id, session } = this._getSession(sessionId);
     const audit = new AuditLog({ dir: this.auditDir, sessionId: id });
     audit.write('prompt', { sessionId: id, prompt: p, autoApprove, dryRun });
+    if (typeof emit === 'function') {
+      await emit({ type: 'run_start', session_id: id, started_at: nowMs(), auto_approve: autoApprove, dry_run: dryRun });
+    }
 
     const tools = INTERCOMSWAP_TOOLS;
     const allowedToolNames = new Set(
@@ -390,6 +396,16 @@ export class PromptRouter {
           result: toolResultForModel,
         };
         audit.write('tool_result', toolStep);
+        if (typeof emit === 'function') await emit(toolStep);
+        if (typeof emit === 'function') {
+          await emit({
+            type: 'final',
+            session_id: id,
+            content: safeJsonStringify(toolResultForModel),
+            content_json: toolResultForModel,
+            steps: 1,
+          });
+        }
         return {
           session_id: id,
           content: safeJsonStringify(toolResultForModel),
@@ -409,6 +425,7 @@ export class PromptRouter {
     let lastExecutedTool = null; // { name, arguments, result }
 
     for (let i = 0; i < max; i += 1) {
+      if (signal?.aborted) throw signal.reason || new Error('aborted');
       const startedAt = nowMs();
       const extraBody = {};
       if (this.llmConfig.extraBody && typeof this.llmConfig.extraBody === 'object') {
@@ -430,6 +447,7 @@ export class PromptRouter {
         minP: this.llmConfig.minP,
         repetitionPenalty: this.llmConfig.repetitionPenalty,
         extraBody: Object.keys(extraBody).length > 0 ? extraBody : null,
+        signal,
       });
 
       // Some servers/models don't emit tool_calls reliably. If the assistant content contains a
@@ -470,6 +488,7 @@ export class PromptRouter {
       };
       steps.push(llmStep);
       audit.write('llm_response', llmStep);
+      if (typeof emit === 'function') await emit(llmStep);
 
       // If there are tool calls, execute them, append tool results, and loop.
       if (Array.isArray(llmOut.toolCalls) && llmOut.toolCalls.length > 0) {
@@ -492,22 +511,18 @@ export class PromptRouter {
               arguments: lastExecutedTool.arguments,
               streak: repeatedToolStreak,
             });
+            const loopBreak = {
+              type: 'loop_break',
+              reason: 'repeated_tool_call',
+              tool: lastExecutedTool.name,
+              arguments: lastExecutedTool.arguments,
+              last_result: lastExecutedTool.result,
+            };
+            if (typeof emit === 'function') await emit(loopBreak);
             return {
               session_id: id,
-              content: safeJsonStringify({
-                type: 'loop_break',
-                reason: 'repeated_tool_call',
-                tool: lastExecutedTool.name,
-                arguments: lastExecutedTool.arguments,
-                last_result: lastExecutedTool.result,
-              }),
-              content_json: {
-                type: 'loop_break',
-                reason: 'repeated_tool_call',
-                tool: lastExecutedTool.name,
-                arguments: lastExecutedTool.arguments,
-                last_result: lastExecutedTool.result,
-              },
+              content: safeJsonStringify(loopBreak),
+              content_json: loopBreak,
               steps,
             };
           }
@@ -526,6 +541,7 @@ export class PromptRouter {
         }
 
         for (const call of llmOut.toolCalls) {
+          if (signal?.aborted) throw signal.reason || new Error('aborted');
           if (!call || typeof call.name !== 'string') {
             throw new Error('Invalid tool call (missing name)');
           }
@@ -555,6 +571,7 @@ export class PromptRouter {
           };
           steps.push(toolStep);
           audit.write('tool_result', toolStep);
+          if (typeof emit === 'function') await emit(toolStep);
 
           // Append tool result as a message so the model can continue.
           session.messages.push(normalizeToolResponseMessage({ toolFormat, toolCall: call, result: toolResultForModel }));
@@ -599,6 +616,17 @@ export class PromptRouter {
         structured_error: parsed.ok && !shape.ok ? shape.error : parsed.ok ? null : parsed.error,
         content_json: contentJson,
       });
+      if (typeof emit === 'function') {
+        await emit({
+          type: 'final',
+          session_id: id,
+          content: rawFinal,
+          content_json: contentJson,
+          steps: steps.length,
+          structured_ok: Boolean(parsed.ok && shape.ok),
+          structured_error: parsed.ok && !shape.ok ? shape.error : parsed.ok ? null : parsed.error,
+        });
+      }
       return { session_id: id, content: rawFinal, content_json: contentJson, steps };
     }
 

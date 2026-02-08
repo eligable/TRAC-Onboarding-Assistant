@@ -7,6 +7,8 @@ import fs from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
+import http from 'node:http';
+import { URL } from 'node:url';
 
 import b4a from 'b4a';
 import PeerWallet from 'trac-wallet';
@@ -131,6 +133,288 @@ async function connectBridge(sc, label) {
   );
 }
 
+function spawnPromptd({ configPath, label }) {
+  const proc = spawn('node', ['scripts/promptd.mjs', '--config', configPath], {
+    cwd: repoRoot,
+    env: { ...process.env, COPYFILE_DISABLE: '1' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  let err = '';
+  const appendOut = (chunk) => {
+    out += chunk;
+    if (out.length > 20000) out = out.slice(-20000);
+  };
+  const appendErr = (chunk) => {
+    err += chunk;
+    if (err.length > 20000) err = err.slice(-20000);
+  };
+  proc.stdout.on('data', (d) => appendOut(String(d)));
+  proc.stderr.on('data', (d) => appendErr(String(d)));
+  proc.on('exit', (code) => {
+    if (code !== 0 && code !== null) {
+      // eslint-disable-next-line no-console
+      console.error(`[e2e:${label}] promptd exited code=${code}. stderr tail:\n${err}\nstdout tail:\n${out}`);
+    }
+  });
+
+  const waitReady = async () => {
+    const started = Date.now();
+    while (Date.now() - started < 60_000) {
+      const matches = Array.from(
+        out.matchAll(
+          /"type"\s*:\s*"promptd_listening"[\s\S]*?"host"\s*:\s*"([^"]+)"[\s\S]*?"port"\s*:\s*(\d+)/g
+        )
+      );
+      if (matches.length > 0) {
+        const m = matches[matches.length - 1];
+        return { host: m[1], port: Number(m[2]) };
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error(`[${label}] promptd did not become ready. stderr tail:\n${err}\nstdout tail:\n${out}`);
+  };
+
+  return { proc, waitReady, tail: () => ({ out, err }) };
+}
+
+async function waitForNdjsonEvent({ url, headers = {}, predicate, timeoutMs = 20_000 }) {
+  const u = new URL(url);
+  if (u.protocol !== 'http:') throw new Error(`unsupported protocol: ${u.protocol}`);
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        protocol: u.protocol,
+        hostname: u.hostname,
+        port: u.port,
+        path: `${u.pathname}${u.search}`,
+        method: 'GET',
+        headers,
+      },
+      (res) => {
+        const status = res.statusCode || 0;
+        if (status >= 400) {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            const text = Buffer.concat(chunks).toString('utf8');
+            reject(new Error(`ndjson stream HTTP ${status}: ${text.slice(0, 400)}`));
+          });
+          return;
+        }
+        let buf = '';
+        const deadline = setTimeout(() => {
+          try {
+            req.destroy();
+          } catch (_e) {}
+          reject(new Error(`ndjson stream timeout after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        res.on('data', (chunk) => {
+          buf += String(chunk || '');
+          while (true) {
+            const idx = buf.indexOf('\n');
+            if (idx < 0) break;
+            const line = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 1);
+            if (!line) continue;
+            let obj = null;
+            try {
+              obj = JSON.parse(line);
+            } catch (_e) {
+              continue;
+            }
+            try {
+              if (predicate(obj)) {
+                clearTimeout(deadline);
+                try {
+                  req.destroy();
+                } catch (_e) {}
+                resolve(obj);
+                return;
+              }
+            } catch (err) {
+              clearTimeout(deadline);
+              try {
+                req.destroy();
+              } catch (_e) {}
+              reject(err);
+              return;
+            }
+          }
+        });
+        res.on('end', () => {
+          clearTimeout(deadline);
+          reject(new Error('ndjson stream ended before predicate matched'));
+        });
+        res.on('error', (err) => {
+          clearTimeout(deadline);
+          reject(err);
+        });
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function readNdjsonUntilFinal({ url, headers = {}, body, timeoutMs = 30_000 }) {
+  const u = new URL(url);
+  if (u.protocol !== 'http:') throw new Error(`unsupported protocol: ${u.protocol}`);
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const req = http.request(
+      {
+        protocol: u.protocol,
+        hostname: u.hostname,
+        port: u.port,
+        path: `${u.pathname}${u.search}`,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'content-length': Buffer.byteLength(data),
+          ...headers,
+        },
+      },
+      (res) => {
+        const status = res.statusCode || 0;
+        if (status >= 400) {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            const text = Buffer.concat(chunks).toString('utf8');
+            reject(new Error(`ndjson run HTTP ${status}: ${text.slice(0, 400)}`));
+          });
+          return;
+        }
+        let buf = '';
+        const events = [];
+        const deadline = setTimeout(() => {
+          try {
+            req.destroy();
+          } catch (_e) {}
+          reject(new Error(`ndjson run timeout after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        res.on('data', (chunk) => {
+          buf += String(chunk || '');
+          while (true) {
+            const idx = buf.indexOf('\n');
+            if (idx < 0) break;
+            const line = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 1);
+            if (!line) continue;
+            let obj = null;
+            try {
+              obj = JSON.parse(line);
+            } catch (_e) {
+              continue;
+            }
+            events.push(obj);
+            if (obj && typeof obj === 'object' && obj.type === 'final') {
+              clearTimeout(deadline);
+              try {
+                req.destroy();
+              } catch (_e) {}
+              resolve(events);
+              return;
+            }
+          }
+        });
+        res.on('end', () => {
+          clearTimeout(deadline);
+          reject(new Error('ndjson run ended before final'));
+        });
+        res.on('error', (err) => {
+          clearTimeout(deadline);
+          reject(err);
+        });
+      }
+    );
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+async function startFakeLlmServer({ toolName = 'intercomswap_sc_stats' } = {}) {
+  const server = http.createServer(async (req, res) => {
+    try {
+      const u = new URL(String(req.url || '/'), 'http://127.0.0.1');
+      if (req.method !== 'POST' || u.pathname !== '/v1/chat/completions') {
+        res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'not_found' }));
+        return;
+      }
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      const raw = Buffer.concat(chunks).toString('utf8');
+      const body = raw ? JSON.parse(raw) : {};
+      const messages = Array.isArray(body?.messages) ? body.messages : [];
+      const hasToolResult = messages.some((m) => m && typeof m === 'object' && (m.role === 'tool' || m.role === 'function'));
+
+      // First response: emit a tool call.
+      if (!hasToolResult) {
+        const json = {
+          id: 'fake-1',
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: body?.model || 'fake',
+          choices: [
+            {
+              index: 0,
+              finish_reason: 'tool_calls',
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: 'call_1',
+                    type: 'function',
+                    function: { name: toolName, arguments: '{}' },
+                  },
+                ],
+              },
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        };
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(json));
+        return;
+      }
+
+      // Second response: final JSON message.
+      const json = {
+        id: 'fake-2',
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: body?.model || 'fake',
+        choices: [
+          {
+            index: 0,
+            finish_reason: 'stop',
+            message: { role: 'assistant', content: JSON.stringify({ type: 'message', text: 'ok' }) },
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      };
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(json));
+    } catch (err) {
+      res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: err?.message ?? String(err) }));
+    }
+  });
+
+  const port = await pickFreePort();
+  await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
+  return {
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+    stop: async () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
 test('e2e: svc_announce re-broadcast reaches late joiners', async (t) => {
   const runId = crypto.randomBytes(4).toString('hex');
 
@@ -150,6 +434,7 @@ test('e2e: svc_announce re-broadcast reaches late joiners', async (t) => {
   const listenerStore = `e2e-svc-listener-${runId}`;
   const announcerKeys = await writePeerKeypair({ storesDir, storeName: announcerStore });
   await writePeerKeypair({ storesDir, storeName: listenerStore });
+  const listenerKeypairPath = path.join(storesDir, listenerStore, 'db', 'keypair.json');
 
   const announcerToken = `token-announcer-${runId}`;
   const listenerToken = `token-listener-${runId}`;
@@ -274,6 +559,100 @@ test('e2e: svc_announce re-broadcast reaches late joiners', async (t) => {
     const s = await listenerSc.stats();
     if (s.type !== 'stats' || s.sidechannelStarted !== true) throw new Error('listener sidechannel not started');
   }, { label: 'listener sidechannel started', tries: 200, delayMs: 250 });
+
+  // Start a fake OpenAI-compatible LLM server to test LLM-mode prompting deterministically.
+  const llm = await startFakeLlmServer({ toolName: 'intercomswap_sc_stats' });
+  t.after(async () => {
+    try {
+      await llm.stop();
+    } catch (_e) {}
+  });
+
+  // Start promptd connected to the listener peer, with HTTP auth enabled.
+  const promptdToken = `promptd-auth-${runId}`;
+  const promptdPort = await pickFreePort();
+  const promptdCfg = path.join(repoRoot, `onchain/prompt/e2e-svc-stream-${runId}.json`);
+  fs.mkdirSync(path.dirname(promptdCfg), { recursive: true });
+  fs.writeFileSync(
+    promptdCfg,
+    JSON.stringify(
+      {
+        agent: { role: 'taker' },
+        peer: { keypair: listenerKeypairPath },
+        llm: { base_url: llm.baseUrl, api_key: '', model: 'fake', response_format: { type: 'json_object' } },
+        server: {
+          host: '127.0.0.1',
+          port: promptdPort,
+          audit_dir: `onchain/prompt/audit-e2e-svc-${runId}`,
+          auth_token: promptdToken,
+          auto_approve_default: false,
+          max_steps: 8,
+          max_repairs: 0,
+        },
+        sc_bridge: { url: `ws://127.0.0.1:${listenerPort}`, token: listenerToken },
+        receipts: { db: `onchain/receipts/e2e-svc-stream-${runId}.sqlite` },
+        ln: { impl: 'cln', backend: 'cli', network: 'regtest' },
+        solana: { rpc_url: 'http://127.0.0.1:8899', commitment: 'confirmed', program_id: '', keypair: '' },
+      },
+      null,
+      2
+    )
+  );
+
+  const promptd = spawnPromptd({ configPath: promptdCfg, label: 'promptd-svc-stream' });
+  t.after(async () => {
+    await killProc(promptd.proc);
+  });
+  const listen = await promptd.waitReady();
+  const base = `http://${listen.host}:${listen.port}`;
+  const authHeaders = { authorization: `Bearer ${promptdToken}` };
+
+  // Verify SC stream receives the svc_announce broadcast (memory-safe NDJSON).
+  const streamEvent = await waitForNdjsonEvent({
+    url: `${base}/v1/sc/stream?channels=0000intercom&since=0&backlog=5`,
+    headers: authHeaders,
+    predicate: (evt) => evt?.type === 'sc_event' && evt?.channel === '0000intercom' && evt?.message?.kind === KIND.SVC_ANNOUNCE,
+    timeoutMs: 20_000,
+  });
+  assert.equal(String(streamEvent?.message?.body?.name), `svc-${runId}`);
+
+  // Verify /v1/run/stream works in direct-tool mode (no LLM dependency).
+  {
+    const events = await readNdjsonUntilFinal({
+      url: `${base}/v1/run/stream`,
+      headers: authHeaders,
+      body: {
+        prompt: JSON.stringify({ type: 'tool', name: 'intercomswap_sc_stats', arguments: {} }),
+        session_id: `e2e-svc-direct-${runId}`,
+        auto_approve: false,
+        dry_run: false,
+        max_steps: 1,
+      },
+    });
+    assert.ok(events.some((e) => e && typeof e === 'object' && e.type === 'tool' && e.name === 'intercomswap_sc_stats'));
+    assert.ok(events.some((e) => e && typeof e === 'object' && e.type === 'final'));
+  }
+
+  // Verify LLM-mode prompting works end-to-end with tool calls (fake server).
+  {
+    const events = await readNdjsonUntilFinal({
+      url: `${base}/v1/run/stream`,
+      headers: authHeaders,
+      body: {
+        prompt: 'Show SC-Bridge stats and then reply with ok.',
+        session_id: `e2e-svc-llm-${runId}`,
+        auto_approve: false,
+        dry_run: false,
+        max_steps: 6,
+      },
+      timeoutMs: 30_000,
+    });
+    assert.ok(events.some((e) => e && typeof e === 'object' && e.type === 'llm'));
+    assert.ok(events.some((e) => e && typeof e === 'object' && e.type === 'tool' && e.name === 'intercomswap_sc_stats'));
+    const final = events.findLast((e) => e && typeof e === 'object' && e.type === 'final');
+    assert.equal(final?.content_json?.type, 'message');
+    assert.equal(final?.content_json?.text, 'ok');
+  }
 
   const seen = [];
   listenerSc.on('sidechannel_message', (evt) => {
