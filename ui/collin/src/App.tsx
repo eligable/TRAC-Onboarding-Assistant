@@ -4171,6 +4171,18 @@ function App() {
                   <div className="muted small">
                     Channels are reused across swaps. Paste a peer in the form <span className="mono">nodeid@host:port</span>.
                   </div>
+                  {lnWalletSats !== null &&
+                  lnChannelCount < 1 &&
+                  Number.isInteger(lnChannelAmountSats) &&
+                  lnChannelAmountSats > 0 &&
+                  lnWalletSats < lnChannelAmountSats ? (
+                    <div className="alert warn" style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>
+                      <b>BTC funding required.</b> Your LN node wallet has {satsToBtcDisplay(lnWalletSats)} BTC ({lnWalletSats} sats) but
+                      opening a {satsToBtcDisplay(lnChannelAmountSats)} BTC ({lnChannelAmountSats} sats) channel needs at least that amount (plus on-chain fees).
+                      {'\n\n'}
+                      Use “Generate BTC address” above, fund it, wait for confirmations, then refresh BTC and open the channel.
+                    </div>
+                  ) : null}
                   <div className="row">
                     <input
                       className="input mono"
