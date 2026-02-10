@@ -461,14 +461,69 @@ export class ToolExecutor {
 	        }
 	      },
 	      listTrades: async ({ limit = 250 } = {}) => {
-	        const store = await this._openReceiptsStore({ required: false });
-	        if (!store) return [];
+	        const { TradeReceiptsStore } = await import('../receipts/store.js');
 	        const n = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.trunc(limit))) : 250;
+
+	        const dbs = [];
+	        let defaultDb = '';
 	        try {
-	          return store.listTradesPaged({ limit: n, offset: 0 });
-	        } finally {
-	          store.close();
+	          const raw = String(this.receipts?.dbPath || '').trim();
+	          if (raw) {
+	            defaultDb = resolveOnchainPath(raw, { label: 'receipts.db' });
+	            dbs.push(defaultDb);
+	          }
+	        } catch (_e) {}
+
+	        // Also include RFQ-bot receipts (if any exist) so offer autopost can prune filled lines even
+	        // when swaps are executed by external bot processes.
+	        try {
+	          const receiptsRoot = path.resolve(process.cwd(), 'onchain', 'receipts');
+	          const rfqBotsRoot = path.join(receiptsRoot, 'rfq-bots');
+	          if (fs.existsSync(rfqBotsRoot) && fs.statSync(rfqBotsRoot).isDirectory()) {
+	            for (const ent of fs.readdirSync(rfqBotsRoot, { withFileTypes: true })) {
+	              if (!ent.isDirectory()) continue;
+	              const dir = path.join(rfqBotsRoot, ent.name);
+	              try {
+	                for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+	                  if (!f.isFile()) continue;
+	                  if (!f.name.endsWith('.sqlite')) continue;
+	                  dbs.push(path.join(dir, f.name));
+	                }
+	              } catch (_e) {}
+	            }
+	          }
+	        } catch (_e) {}
+
+	        const uniq = Array.from(new Set(dbs.filter(Boolean)));
+	        const byId = new Map(); // trade_id -> trade
+	        for (const dbPath of uniq) {
+	          try {
+	            if (dbPath !== defaultDb && !fs.existsSync(dbPath)) continue;
+	            const store = TradeReceiptsStore.open({ dbPath });
+	            try {
+	              const trades = store.listTradesPaged({ limit: n, offset: 0 });
+	              for (const tr of Array.isArray(trades) ? trades : []) {
+	                const id = tr ? String(tr.trade_id || '').trim() : '';
+	                if (!id) continue;
+	                const prev = byId.get(id);
+	                const upd = tr && typeof tr.updated_at === 'number' ? tr.updated_at : 0;
+	                const prevUpd = prev && typeof prev.updated_at === 'number' ? prev.updated_at : 0;
+	                if (!prev || upd > prevUpd) byId.set(id, tr);
+	              }
+	            } finally {
+	              store.close();
+	            }
+	          } catch (_e) {
+	            // Ignore bot receipts that are locked/corrupt; autopost should remain resilient.
+	          }
 	        }
+	        const out = Array.from(byId.values());
+	        out.sort((a, b) => {
+	          const au = a && typeof a.updated_at === 'number' ? a.updated_at : 0;
+	          const bu = b && typeof b.updated_at === 'number' ? b.updated_at : 0;
+	          return bu - au;
+	        });
+	        return out.slice(0, n);
 	      },
 	    });
 	  }

@@ -1188,7 +1188,7 @@ Lightning channel note:
 
 Autopost (Collin "Run as bot") safety:
 - RFQ autopost jobs stop automatically once their `trade_id` progresses beyond the RFQ phase (prevents multiple counterparties racing the same RFQ).
-- Offer autopost jobs prune filled offer lines (claimed trades matching maker peer + amounts) and stop once all lines are filled or the offer expires.
+- Offer autopost jobs prune filled offer lines (claimed trades matching maker peer + amounts) and stop once all lines are filled or the offer expires (reads local receipts, including `onchain/receipts/rfq-bots/...` when present).
 
 Lightning network flag reminder:
 - CLN mainnet is `--ln-network bitcoin`
