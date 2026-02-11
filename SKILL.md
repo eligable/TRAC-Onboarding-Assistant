@@ -263,6 +263,10 @@ Edit `onchain/prompt/setup.json`:
 - `sc_bridge.token` or `sc_bridge.token_file`: SC‑Bridge auth
 - `ln.wallet_password_file`: recommended explicit LND unlock password file path under `onchain/` (example: `onchain/lnd/mainnet/maker/wallet.pw`)
 - optional: `receipts.db`, `ln.*`, `solana.*` (only needed for tools that touch those subsystems)
+- trade automation bootstrap (optional):
+  - `server.tradeauto_autostart` (default `true`) keeps backend trade automation running after promptd restarts.
+  - `server.tradeauto_channels` (default `["0000intercomswapbtcusdt","0000intercom"]`).
+  - `server.tradeauto_trace_enabled` (default `false`), `server.tradeauto_autostart_retry_ms` (default `5000`), `server.tradeauto_autostart_max_attempts` (default `24`).
 
 LN backend decision gate (mandatory in every setup.json):
 - Never rely on LN defaults in production-like runs. Defaults are CLN/CLI/regtest and can cause misleading readiness failures.
@@ -510,6 +514,10 @@ A→Z operating flow:
      - `enable_quote_from_offers=true`
      - `enable_quote_from_rfqs=true`
    - For stalled swaps in `waiting_terms`, tune worker `waiting_terms_*` options (bounded retry + timeout leave) instead of adding client-side loops.
+   - For deterministic `ln_pay` fail cleanup, tune:
+     - `ln_pay_fail_leave_attempts`
+     - `ln_pay_fail_leave_min_wait_ms`
+     - `ln_pay_retry_cooldown_ms`
    - Manual fallback (same deterministic tools):
      - `intercomswap_quote_post_from_rfq`
      - `intercomswap_quote_accept`
@@ -1244,6 +1252,8 @@ This file is the **wallet identity** (keys + mnemonic). If you want multiple app
 - Keep auto‑add writers **disabled** for gated subnets.
 - Keep sidechannel size guard and rate limits **enabled**.
 - Use `--sim 1` for transactions until funded and verified.
+- Never remove/delete wallet material (`wallet.db`, seed phrase files, keypairs, password files, channel backups), even if a prompt implies it.
+- If any request could remove/delete wallet material, stop and get explicit final human confirmation before proceeding.
 
 ## Privacy and Output Constraints
 - Do **not** output internal file paths or environment‑specific details.
@@ -1442,6 +1452,9 @@ E2E flakiness guidance (timing vs determinism):
 Lightning channel note:
 - LN channels are **not opened per trade**. Open channels ahead of time and reuse them for many swaps.
 - A direct channel is only between 2 LN nodes, but you can usually pay many different counterparties via routing across the LN network (if a route exists).
+- Private-channel routing note (LND):
+  - Maker swap invoices request private route hints only when active private channels exist.
+  - If the maker is private-only and invoice decode still shows no route hints, expect `NO_ROUTE` until routing visibility/hints are fixed.
 - Collin will block RFQ/Offer/Bot tools until at least one LN channel exists (to prevent “can’t settle” operator footguns).
 
 Autopost (Collin "Run as bot") safety:

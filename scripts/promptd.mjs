@@ -244,6 +244,12 @@ async function main() {
             // If the model returns invalid structured output (eg, plans instead of tool calls),
             // promptd will ask it to re-emit valid JSON up to this many times.
             max_repairs: 2,
+            // Keep backend trade automation running by default, even after promptd restarts.
+            tradeauto_autostart: true,
+            tradeauto_channels: ['0000intercomswapbtcusdt', '0000intercom'],
+            tradeauto_trace_enabled: false,
+            tradeauto_autostart_retry_ms: 5000,
+            tradeauto_autostart_max_attempts: 24,
             // Optional TLS (HTTPS). If set, promptd serves https:// instead of http://.
             // tls: { key: 'onchain/prompt/server.key', cert: 'onchain/prompt/server.crt' }
             tls: null,
@@ -307,6 +313,68 @@ async function main() {
     maxRepairs: setup.server.maxRepairs,
     agentRole: setup.agent?.role || '',
   });
+
+  // Keep backend trade automation alive across promptd restarts.
+  // stack_start already starts tradeauto, but this catches the common case where promptd is restarted independently.
+  const tradeAutoBootstrap = {
+    enabled: Boolean(setup?.server?.tradeAutoAutostart),
+    channels:
+      Array.isArray(setup?.server?.tradeAutoChannels) && setup.server.tradeAutoChannels.length > 0
+        ? setup.server.tradeAutoChannels
+        : ['0000intercomswapbtcusdt', '0000intercom'],
+    traceEnabled: Boolean(setup?.server?.tradeAutoTraceEnabled),
+    retryMs: Number.isFinite(setup?.server?.tradeAutoAutostartRetryMs) ? Math.max(1000, Math.trunc(setup.server.tradeAutoAutostartRetryMs)) : 5000,
+    maxAttempts:
+      Number.isFinite(setup?.server?.tradeAutoAutostartMaxAttempts) ? Math.max(1, Math.trunc(setup.server.tradeAutoAutostartMaxAttempts)) : 24,
+  };
+  let tradeAutoBootstrapTimer = null;
+  let tradeAutoBootstrapAttempts = 0;
+  let tradeAutoBootstrapBusy = false;
+  async function ensureTradeAutoRunning() {
+    if (!tradeAutoBootstrap.enabled) return true;
+    if (tradeAutoBootstrapBusy) return false;
+    tradeAutoBootstrapBusy = true;
+    try {
+      const st = await executor.execute('intercomswap_tradeauto_status', {}, { autoApprove: false, dryRun: false });
+      if (st && typeof st === 'object' && st.running) return true;
+      await executor.execute(
+        'intercomswap_tradeauto_start',
+        {
+          channels: tradeAutoBootstrap.channels,
+          trace_enabled: tradeAutoBootstrap.traceEnabled,
+          ln_liquidity_mode: 'aggregate',
+          enable_quote_from_offers: true,
+          enable_quote_from_rfqs: true,
+          enable_accept_quotes: true,
+          enable_invite_from_accepts: true,
+          enable_join_invites: true,
+          enable_settlement: true,
+        },
+        { autoApprove: true, dryRun: false }
+      );
+      const after = await executor.execute('intercomswap_tradeauto_status', {}, { autoApprove: false, dryRun: false });
+      return Boolean(after && typeof after === 'object' && after.running);
+    } catch (_e) {
+      return false;
+    } finally {
+      tradeAutoBootstrapBusy = false;
+    }
+  }
+  function startTradeAutoBootstrapLoop() {
+    if (!tradeAutoBootstrap.enabled) return;
+    const tick = async () => {
+      tradeAutoBootstrapAttempts += 1;
+      const ok = await ensureTradeAutoRunning();
+      if (ok || tradeAutoBootstrapAttempts >= tradeAutoBootstrap.maxAttempts) {
+        if (tradeAutoBootstrapTimer) clearInterval(tradeAutoBootstrapTimer);
+        tradeAutoBootstrapTimer = null;
+      }
+    };
+    void tick();
+    tradeAutoBootstrapTimer = setInterval(() => {
+      void tick();
+    }, tradeAutoBootstrap.retryMs);
+  }
 
   const handler = async (req, res) => {
     try {
@@ -439,10 +507,19 @@ async function main() {
               limit: 500,
               channels: channels.length > 0 ? channels : null,
             });
+            let emitted = 0;
             for (const e of slice.events) {
               const { type: _t, ...rest } = e || {};
               await writeNdjson(res, { type: 'sc_event', ...rest });
               cursor = Math.max(cursor, e.seq);
+              emitted += 1;
+            }
+            // Important: when channel filtering is active, scLogWait() wakes on any new seq.
+            // If only non-matching channels advanced the global seq, slice.events is empty and
+            // cursor would otherwise never move, causing a tight loop that pegs CPU.
+            if (emitted === 0) {
+              const latest = Number(slice.latest_seq || 0);
+              if (latest > cursor) cursor = latest;
             }
           }
         } catch (err) {
@@ -506,11 +583,23 @@ async function main() {
           tls: Boolean(tls),
           audit_dir: setup.server.auditDir,
           llm: { base_url: setup.llm.baseUrl, model: setup.llm.model, tool_format: setup.llm.toolFormat },
+          tradeauto_bootstrap: {
+            enabled: tradeAutoBootstrap.enabled,
+            channels: tradeAutoBootstrap.channels,
+            retry_ms: tradeAutoBootstrap.retryMs,
+            max_attempts: tradeAutoBootstrap.maxAttempts,
+          },
         },
         null,
         2
       ) + '\n'
     );
+    startTradeAutoBootstrapLoop();
+  });
+
+  process.on('exit', () => {
+    if (tradeAutoBootstrapTimer) clearInterval(tradeAutoBootstrapTimer);
+    tradeAutoBootstrapTimer = null;
   });
 }
 

@@ -46,6 +46,23 @@ function parseFloatLike(value, fallback = null) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function parseChannelList(value, fallback = []) {
+  const src = Array.isArray(value) ? value : Array.isArray(fallback) ? fallback : [];
+  const out = [];
+  const seen = new Set();
+  for (const raw of src) {
+    const ch = normalizeString(raw, { allowEmpty: true });
+    if (!ch) continue;
+    if (ch.length > 128) continue;
+    if (/\s/.test(ch)) continue;
+    if (seen.has(ch)) continue;
+    seen.add(ch);
+    out.push(ch);
+    if (out.length >= 64) break;
+  }
+  return out;
+}
+
 function resolvePath(baseDir, maybePath) {
   const p = normalizeString(maybePath, { allowEmpty: true });
   if (!p) return '';
@@ -117,6 +134,8 @@ export const DEFAULT_PROMPT_SETUP_PATH = 'onchain/prompt/setup.json';
 
   const serverRaw = isObject(raw.server) ? raw.server : {};
   const tlsRaw = isObject(serverRaw.tls) ? serverRaw.tls : null;
+  const tradeAutoAutostartRetryMsRaw = parseIntLike(serverRaw.tradeauto_autostart_retry_ms, 5000) ?? 5000;
+  const tradeAutoAutostartMaxAttemptsRaw = parseIntLike(serverRaw.tradeauto_autostart_max_attempts, 24) ?? 24;
   const server = {
     host: normalizeString(serverRaw.host, { allowEmpty: true }) || '127.0.0.1',
     port: parseIntLike(serverRaw.port, 9333) ?? 9333,
@@ -125,6 +144,11 @@ export const DEFAULT_PROMPT_SETUP_PATH = 'onchain/prompt/setup.json';
     autoApproveDefault: Boolean(serverRaw.auto_approve_default),
     maxSteps: parseIntLike(serverRaw.max_steps, 12) ?? 12,
     maxRepairs: parseIntLike(serverRaw.max_repairs, 2) ?? 2,
+    tradeAutoAutostart: serverRaw.tradeauto_autostart === undefined ? true : Boolean(serverRaw.tradeauto_autostart),
+    tradeAutoChannels: parseChannelList(serverRaw.tradeauto_channels, ['0000intercomswapbtcusdt', '0000intercom']),
+    tradeAutoTraceEnabled: Boolean(serverRaw.tradeauto_trace_enabled),
+    tradeAutoAutostartRetryMs: Math.max(1000, Math.min(60_000, Math.trunc(tradeAutoAutostartRetryMsRaw))),
+    tradeAutoAutostartMaxAttempts: Math.max(1, Math.min(1000, Math.trunc(tradeAutoAutostartMaxAttemptsRaw))),
     tls: tlsRaw
       ? {
           keyPath: resolvePath(baseDir, tlsRaw.key || ''),
