@@ -2574,8 +2574,9 @@ export class ToolExecutor {
       // - platform config PDA (program-wide)
       // - trade config PDA (per trade_fee_collector)
       //
-      // For local test validators we auto-init sane defaults so the stack is ready to settle swaps
-      // immediately after START (no extra terminal steps).
+      // Auto-init/normalize sane defaults so the stack is ready to settle swaps immediately after START.
+      // This also migrates old signer-scoped trade config values (for example 50 bps) to the current
+      // default (10 bps), which avoids deterministic RFQ fee-cap mismatches.
       let solOut = null;
       let solErr = null;
       try {
@@ -2650,42 +2651,36 @@ export class ToolExecutor {
           }
         }
 
-        // Ensure trade config for this signer exists (default 0.1% for local-dev).
+        // Ensure trade config for this signer exists and matches the default trade fee.
+        // Trade config authority is signer-scoped (fee_collector == authority), so this is safe on
+        // both local and non-local networks.
         let tcfg = await this.execute(
           'intercomswap_sol_trade_config_get',
           { fee_collector: signerPubkey },
           { autoApprove: false, dryRun: false, secrets }
         );
-        if (!isLocal) {
-          if (!tcfg) {
-            throw new Error(
-              `Solana trade fee config missing for fee_collector=${signerPubkey}. Run sol_trade_config_set before swapping.`
-            );
-          }
-        } else {
-          if (!tcfg) {
-            await this.execute(
-              'intercomswap_sol_trade_config_set',
-              { fee_bps: DEFAULT_TRADE_FEE_BPS, fee_collector: signerPubkey },
-              { autoApprove: true, dryRun: false, secrets }
-            );
-            tcfg = await this.execute(
-              'intercomswap_sol_trade_config_get',
-              { fee_collector: signerPubkey },
-              { autoApprove: false, dryRun: false, secrets }
-            );
-          } else if (Number(tcfg.fee_bps) !== DEFAULT_TRADE_FEE_BPS) {
-            await this.execute(
-              'intercomswap_sol_trade_config_set',
-              { fee_bps: DEFAULT_TRADE_FEE_BPS, fee_collector: signerPubkey },
-              { autoApprove: true, dryRun: false, secrets }
-            );
-            tcfg = await this.execute(
-              'intercomswap_sol_trade_config_get',
-              { fee_collector: signerPubkey },
-              { autoApprove: false, dryRun: false, secrets }
-            );
-          }
+        if (!tcfg) {
+          await this.execute(
+            'intercomswap_sol_trade_config_set',
+            { fee_bps: DEFAULT_TRADE_FEE_BPS, fee_collector: signerPubkey },
+            { autoApprove: true, dryRun: false, secrets }
+          );
+          tcfg = await this.execute(
+            'intercomswap_sol_trade_config_get',
+            { fee_collector: signerPubkey },
+            { autoApprove: false, dryRun: false, secrets }
+          );
+        } else if (Number(tcfg.fee_bps) !== DEFAULT_TRADE_FEE_BPS) {
+          await this.execute(
+            'intercomswap_sol_trade_config_set',
+            { fee_bps: DEFAULT_TRADE_FEE_BPS, fee_collector: signerPubkey },
+            { autoApprove: true, dryRun: false, secrets }
+          );
+          tcfg = await this.execute(
+            'intercomswap_sol_trade_config_get',
+            { fee_collector: signerPubkey },
+            { autoApprove: false, dryRun: false, secrets }
+          );
         }
 
         // Final sanity check: read config PDA (signals RPC+program loaded).
@@ -3689,9 +3684,24 @@ export class ToolExecutor {
       if (!Number.isFinite(rfqMaxTotalFeeBps) || rfqMaxTotalFeeBps < 0 || rfqMaxTotalFeeBps > 1500) {
         throw new Error(`${toolName}: rfq_envelope.body.max_total_fee_bps invalid`);
       }
-      if (platformFeeBps > rfqMaxPlatformFeeBps) throw new Error(`${toolName}: on-chain platform fee exceeds RFQ max_platform_fee_bps`);
-      if (tradeFeeBps > rfqMaxTradeFeeBps) throw new Error(`${toolName}: on-chain trade fee exceeds RFQ max_trade_fee_bps`);
-      if (platformFeeBps + tradeFeeBps > rfqMaxTotalFeeBps) throw new Error(`${toolName}: on-chain total fee exceeds RFQ max_total_fee_bps`);
+      if (platformFeeBps > rfqMaxPlatformFeeBps) {
+        throw new Error(
+          `${toolName}: on-chain platform fee exceeds RFQ max_platform_fee_bps ` +
+            `(platform_fee_bps=${platformFeeBps}, rfq_max_platform_fee_bps=${rfqMaxPlatformFeeBps}, trade_fee_collector=${tradeFeeCollector})`
+        );
+      }
+      if (tradeFeeBps > rfqMaxTradeFeeBps) {
+        throw new Error(
+          `${toolName}: on-chain trade fee exceeds RFQ max_trade_fee_bps ` +
+            `(trade_fee_bps=${tradeFeeBps}, rfq_max_trade_fee_bps=${rfqMaxTradeFeeBps}, trade_fee_collector=${tradeFeeCollector})`
+        );
+      }
+      if (platformFeeBps + tradeFeeBps > rfqMaxTotalFeeBps) {
+        throw new Error(
+          `${toolName}: on-chain total fee exceeds RFQ max_total_fee_bps ` +
+            `(platform_plus_trade_fee_bps=${platformFeeBps + tradeFeeBps}, rfq_max_total_fee_bps=${rfqMaxTotalFeeBps}, trade_fee_collector=${tradeFeeCollector})`
+        );
+      }
       const fundingCheck = await maybeAssertLocalUsdtFunding({
         executor: this,
         toolName,

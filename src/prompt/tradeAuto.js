@@ -136,6 +136,10 @@ function isPermanentNegotiationError(raw) {
   if (s.includes('listing_in_progress')) return true;
   if (s.includes('listing_filled')) return true;
   if (s.includes('quote_accept already exists')) return true;
+  // RFQ fee-cap mismatches are deterministic for a given RFQ + collector, retrying only burns CPU.
+  if (s.includes('on-chain platform fee exceeds rfq max_platform_fee_bps')) return true;
+  if (s.includes('on-chain trade fee exceeds rfq max_trade_fee_bps')) return true;
+  if (s.includes('on-chain total fee exceeds rfq max_total_fee_bps')) return true;
   return false;
 }
 
