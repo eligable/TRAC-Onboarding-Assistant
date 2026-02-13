@@ -10055,13 +10055,18 @@ function TradeRow({
         ? Number.parseInt(refundAfterRaw.trim(), 10)
         : null;
   const nowSec = Number.isFinite(nowUnixSec as any) ? Number(nowUnixSec) : Math.floor(Date.now() / 1000);
-  const refundReached = refundAfterUnix !== null && Number.isFinite(refundAfterUnix) && nowSec >= refundAfterUnix;
+  const refundHasWindow =
+    refundAfterUnix !== null && Number.isFinite(refundAfterUnix) && refundAfterUnix > 0;
+  const refundReached = refundHasWindow && nowSec >= refundAfterUnix;
 
   const canClaim = !terminal && stateLower === 'ln_paid' && Boolean(String(trade?.ln_preimage_hex || '').trim());
-  const canRefund = !terminal && stateLower === 'escrow' && refundReached;
+  // Visual emphasis should reflect the stage ("escrow -> refund path") even if the refund timelock
+  // hasn't been reached yet, so operators can spot refundable trades in clutter.
+  const refundRelevant = !terminal && stateLower === 'escrow' && refundHasWindow;
+  const canRefund = refundRelevant && refundReached;
   const refundTitle = canRefund
     ? 'Refund now'
-    : refundAfterUnix && Number.isFinite(refundAfterUnix)
+    : refundHasWindow
       ? `Refund available after ${unixSecToUtcIso(refundAfterUnix)}`
       : 'Not refundable yet';
 
@@ -10089,12 +10094,12 @@ function TradeRow({
           >
             Claim
           </button>
-	          <button
-	            className={`btn small ${canRefund ? 'primary' : ''}`}
-	            aria-disabled={!canRefund}
-	            title={refundTitle}
-	            onClick={(e) => { e.stopPropagation(); onRecoverRefund(); }}
-	          >
+		          <button
+		            className={`btn small ${refundRelevant ? 'primary' : ''}`}
+		            aria-disabled={!canRefund}
+		            title={refundTitle}
+		            onClick={(e) => { e.stopPropagation(); onRecoverRefund(); }}
+		          >
 	            Refund
 	          </button>
         </div>
