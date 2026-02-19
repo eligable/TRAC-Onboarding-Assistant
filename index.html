@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>TRAC Onboarding Assistant</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #050810;
+    --surface: #0a0f1e;
+    --surface2: #0f1628;
+    --border: #1a2540;
+    --accent: #00e5ff;
+    --accent2: #ff6b35;
+    --accent3: #7b2fff;
+    --text: #e8eaf6;
+    --muted: #5c6880;
+    --success: #00ff88;
+    --user-bubble: #111827;
+    --bot-bubble: #0d1f3c;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Animated grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Glow orbs */
+  body::after {
+    content: '';
+    position: fixed;
+    top: -20%;
+    right: -10%;
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, rgba(123,47,255,0.12) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .orb2 {
+    position: fixed;
+    bottom: -10%;
+    left: -5%;
+    width: 400px;
+    height: 400px;
+    background: radial-gradient(circle, rgba(0,229,255,0.08) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Header */
+  header {
+    position: relative;
+    z-index: 10;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(5,8,16,0.9);
+    backdrop-filter: blur(20px);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .logo-ring {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    animation: pulse-ring 3s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes pulse-ring {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,229,255,0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(0,229,255,0); }
+  }
+
+  .logo-inner {
+    width: 28px;
+    height: 28px;
+    background: linear-gradient(135deg, var(--accent), var(--accent3));
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--success);
+    border-radius: 50%;
+    position: absolute;
+    bottom: 1px;
+    right: 1px;
+    animation: blink 2s ease-in-out infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .header-text h1 {
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    color: var(--text);
+  }
+
+  .header-text p {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    margin-top: 2px;
+  }
+
+  .header-badge {
+    margin-left: auto;
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid rgba(0,229,255,0.3);
+    background: rgba(0,229,255,0.05);
+    font-size: 10px;
+    font-family: 'Space Mono', monospace;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+  }
+
+  /* Quick nav topics */
+  .topics-bar {
+    position: relative;
+    z-index: 10;
+    padding: 10px 24px;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--border);
+    background: rgba(5,8,16,0.7);
+    scrollbar-width: none;
+  }
+  .topics-bar::-webkit-scrollbar { display: none; }
+
+  .topic-chip {
+    flex-shrink: 0;
+    padding: 6px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: 'Space Mono', monospace;
+    white-space: nowrap;
+  }
+
+  .topic-chip:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(0,229,255,0.05);
+    transform: translateY(-1px);
+  }
+
+  /* Chat area */
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    position: relative;
+    z-index: 5;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  /* Welcome card */
+  .welcome-card {
+    background: linear-gradient(135deg, rgba(0,229,255,0.06), rgba(123,47,255,0.06));
+    border: 1px solid rgba(0,229,255,0.15);
+    border-radius: 16px;
+    padding: 28px;
+    text-align: center;
+    animation: fadeSlideIn 0.6s ease both;
+  }
+
+  @keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .welcome-card h2 {
+    font-size: 22px;
+    font-weight: 800;
+    background: linear-gradient(90deg, var(--accent), var(--accent3));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 8px;
+  }
+
+  .welcome-card p {
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 20px;
+  }
+
+  .quick-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .qa-btn {
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.2s;
+    font-family: 'Syne', sans-serif;
+    line-height: 1.4;
+  }
+
+  .qa-btn:hover {
+    border-color: var(--accent);
+    background: rgba(0,229,255,0.05);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 20px rgba(0,229,255,0.1);
+  }
+
+  .qa-btn .qa-icon {
+    font-size: 18px;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  /* Message bubbles */
+  .msg {
+    display: flex;
+    gap: 12px;
+    animation: fadeSlideIn 0.3s ease both;
+    max-width: 820px;
+  }
+
+  .msg.user {
+    flex-direction: row-reverse;
+    align-self: flex-end;
+  }
+
+  .msg-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: 'Space Mono', monospace;
+    margin-top: 2px;
+  }
+
+  .bot-avatar {
+    background: linear-gradient(135deg, var(--accent), var(--accent3));
+    color: #fff;
+  }
+
+  .user-avatar {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+
+  .bubble {
+    padding: 14px 18px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.7;
+    max-width: calc(100% - 48px);
+  }
+
+  .bot .bubble {
+    background: var(--bot-bubble);
+    border: 1px solid var(--border);
+    border-top-left-radius: 4px;
+    color: var(--text);
+  }
+
+  .user .bubble {
+    background: rgba(0,229,255,0.08);
+    border: 1px solid rgba(0,229,255,0.2);
+    border-top-right-radius: 4px;
+    color: var(--text);
+    text-align: right;
+  }
+
+  .bubble h3 {
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-family: 'Space Mono', monospace;
+  }
+
+  .bubble ul {
+    list-style: none;
+    margin: 8px 0;
+  }
+
+  .bubble ul li {
+    padding: 4px 0;
+    padding-left: 16px;
+    position: relative;
+    color: var(--text);
+  }
+
+  .bubble ul li::before {
+    content: '▶';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-size: 8px;
+    top: 7px;
+  }
+
+  .bubble .step {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+
+  .bubble .step:last-child { border-bottom: none; }
+
+  .step-num {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent3), var(--accent));
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-family: 'Space Mono', monospace;
+  }
+
+  .highlight-box {
+    background: rgba(0,229,255,0.06);
+    border: 1px solid rgba(0,229,255,0.15);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 10px 0;
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    color: var(--accent);
+  }
+
+  .warn-box {
+    background: rgba(255,107,53,0.06);
+    border: 1px solid rgba(255,107,53,0.2);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin: 10px 0;
+    font-size: 12px;
+    color: var(--accent2);
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: 'Space Mono', monospace;
+    font-weight: 700;
+  }
+
+  .tag-cyan { background: rgba(0,229,255,0.1); color: var(--accent); }
+  .tag-purple { background: rgba(123,47,255,0.15); color: #a78bfa; }
+  .tag-orange { background: rgba(255,107,53,0.1); color: var(--accent2); }
+
+  /* Typing indicator */
+  .typing {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .typing-dots {
+    background: var(--bot-bubble);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    border-top-left-radius: 4px;
+    padding: 14px 18px;
+    display: flex;
+    gap: 5px;
+    align-items: center;
+  }
+
+  .typing-dots span {
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: bounce 1.2s ease-in-out infinite;
+  }
+
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes bounce {
+    0%, 100% { transform: translateY(0); opacity: 0.5; }
+    50% { transform: translateY(-6px); opacity: 1; }
+  }
+
+  /* Input area */
+  .input-area {
+    position: relative;
+    z-index: 10;
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+    background: rgba(5,8,16,0.95);
+    backdrop-filter: blur(20px);
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+  }
+
+  #input {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 16px;
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    outline: none;
+    resize: none;
+    min-height: 48px;
+    max-height: 120px;
+    transition: border-color 0.2s;
+    line-height: 1.5;
+  }
+
+  #input:focus {
+    border-color: rgba(0,229,255,0.4);
+    box-shadow: 0 0 0 3px rgba(0,229,255,0.05);
+  }
+
+  #input::placeholder { color: var(--muted); }
+
+  #send-btn {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    border: none;
+    background: linear-gradient(135deg, var(--accent3), var(--accent));
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+
+  #send-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0,229,255,0.3);
+  }
+
+  #send-btn:active { transform: translateY(0); }
+
+  #send-btn svg { width: 18px; height: 18px; }
+
+  .input-hint {
+    font-size: 10px;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+    text-align: center;
+    padding: 4px 0 0;
+  }
+
+  @media (max-width: 600px) {
+    .quick-actions { grid-template-columns: 1fr; }
+    header { padding: 12px 16px; }
+    #chat { padding: 16px; }
+    .input-area { padding: 12px 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="orb2"></div>
+
+<header>
+  <div class="logo-ring">
+    <div class="logo-inner">T</div>
+    <div class="status-dot"></div>
+  </div>
+  <div class="header-text">
+    <h1>TRAC Onboarding Assistant</h1>
+    <p>Powered by Intercom P2P Network</p>
+  </div>
+  <div class="header-badge">LIVE</div>
+</header>
+
+<div class="topics-bar">
+  <div class="topic-chip" onclick="askTopic('what is trac')">🔷 What is TRAC?</div>
+  <div class="topic-chip" onclick="askTopic('setup wallet')">👛 Setup Wallet</div>
+  <div class="topic-chip" onclick="askTopic('how to swap')">🔄 How to Swap</div>
+  <div class="topic-chip" onclick="askTopic('tokenomics')">📊 Tokenomics</div>
+  <div class="topic-chip" onclick="askTopic('what is intercom')">⚡ Intercom Protocol</div>
+  <div class="topic-chip" onclick="askTopic('faq')">❓ FAQ</div>
+  <div class="topic-chip" onclick="askTopic('trac ecosystem')">🌐 Ecosystem</div>
+</div>
+
+<div id="chat">
+  <div class="welcome-card">
+    <h2>Welcome to TRAC Network 👋</h2>
+    <p>I'm your onboarding assistant for the TRAC ecosystem. Ask me anything about TRAC, setting up your wallet, swapping tokens, or how the Intercom protocol works.</p>
+    <div class="quick-actions">
+      <button class="qa-btn" onclick="askTopic('what is trac')">
+        <span class="qa-icon">🔷</span>
+        <strong>What is TRAC?</strong><br/>
+        <small style="color: var(--muted);">Learn the basics</small>
+      </button>
+      <button class="qa-btn" onclick="askTopic('setup wallet')">
+        <span class="qa-icon">👛</span>
+        <strong>Setup Wallet</strong><br/>
+        <small style="color: var(--muted);">Step-by-step guide</small>
+      </button>
+      <button class="qa-btn" onclick="askTopic('how to swap')">
+        <span class="qa-icon">🔄</span>
+        <strong>How to Swap</strong><br/>
+        <small style="color: var(--muted);">IntercomSwap guide</small>
+      </button>
+      <button class="qa-btn" onclick="askTopic('tokenomics')">
+        <span class="qa-icon">📊</span>
+        <strong>Tokenomics</strong><br/>
+        <small style="color: var(--muted);">Supply & distribution</small>
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="input-area">
+  <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
+    <textarea id="input" placeholder="Ask anything about TRAC, wallets, swapping..." rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+    <div class="input-hint">Press Enter to send · Shift+Enter for new line</div>
+  </div>
+  <button id="send-btn" onclick="sendMessage()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="22" y1="2" x2="11" y2="13"/>
+      <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+    </svg>
+  </button>
+</div>
+
+<script>
+const KB = {
+  "what is trac": {
+    title: "What is TRAC?",
+    html: `
+      <h3>🔷 TRAC Network Overview</h3>
+      <p>TRAC is a <strong>decentralized protocol</strong> built on Bitcoin that enables trustless, peer-to-peer interactions between agents, applications, and users.</p>
+      <div class="highlight-box">⚡ TRAC = Traceable, Reliable, Autonomous Coordination</div>
+      <p>Key components:</p>
+      <ul>
+        <li><span class="tag tag-cyan">Trac Core</span> — The base settlement layer on Bitcoin</li>
+        <li><span class="tag tag-purple">Intercom Protocol</span> — Fast P2P sidechannels for agent coordination</li>
+        <li><span class="tag tag-orange">IntercomSwap</span> — Non-custodial cross-chain swaps</li>
+        <li><span class="tag tag-cyan">TNK Token</span> — Native utility token for the ecosystem</li>
+      </ul>
+      <p style="margin-top:10px; color: var(--muted); font-size:13px;">TRAC enables the creation of autonomous agent networks that can transact, coordinate, and reach consensus without central intermediaries.</p>
+    `
+  },
+  "setup wallet": {
+    title: "Setting Up Your TRAC Wallet",
+    html: `
+      <h3>👛 Wallet Setup Guide</h3>
+      <p>To interact with the TRAC ecosystem, you'll need a compatible Bitcoin wallet. Here's how to get started:</p>
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <strong>Install a Bitcoin Wallet</strong><br/>
+          <span style="color:var(--muted); font-size:13px;">Recommended: Unisat Wallet, Xverse, or OrdinalSafe (browser extension)</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <strong>Create or Import Your Wallet</strong><br/>
+          <span style="color:var(--muted); font-size:13px;">Generate a new wallet or import existing seed phrase. WRITE DOWN your seed phrase!</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <strong>Fund Your Wallet</strong><br/>
+          <span style="color:var(--muted); font-size:13px;">Send BTC to cover transaction fees. Start with a small amount.</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>
+          <strong>Connect to TRAC dApps</strong><br/>
+          <span style="color:var(--muted); font-size:13px;">Visit the TRAC dashboard and connect your wallet to access the ecosystem.</span>
+        </div>
+      </div>
+      <div class="warn-box">⚠️ Never share your seed phrase with anyone — not even TRAC support!</div>
+    `
+  },
+  "how to swap": {
+    title: "How to Swap on IntercomSwap",
+    html: `
+      <h3>🔄 IntercomSwap Guide</h3>
+      <p>IntercomSwap enables <strong>non-custodial cross-chain swaps</strong> negotiated over Intercom sidechannels. Currently supports BTC Lightning ↔ Solana USDT.</p>
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <strong>Connect Both Wallets</strong><br/>
+          <span style="color:var(--muted); font-size:13px;">Connect your Bitcoin Lightning wallet + Solana wallet (Phantom recommended)</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <strong>Request a Quote (RFQ)</strong><br/>
+          <span style="color:var(--muted); font-size:13px;">The app broadcasts your swap intent over Intercom P2P channels to find the best rate</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <strong>Review & Confirm</strong><br/>
+          <span style="color:var(--muted); font-size:13px;">Review the HTLC escrow terms, rate, and fees before confirming</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div>
+          <strong>Settlement</strong><br/>
+          <span style="color:var(--muted); font-size:13px;">Swap settles atomically — either both sides complete or both refund. Fully trustless.</span>
+        </div>
+      </div>
+      <div class="highlight-box">🔐 HTLC-style escrow ensures your funds are always safe during the swap</div>
+    `
+  },
+  "tokenomics": {
+    title: "TRAC / TNK Tokenomics",
+    html: `
+      <h3>📊 TNK Tokenomics</h3>
+      <p>TNK is the native utility token of the TRAC Network, used for fees, governance, and incentivizing network participants.</p>
+      <div class="highlight-box">
+        📦 Total Supply: Inscribed on Bitcoin (BRC-20 or Trac-native)<br/>
+        🔥 Burn Mechanism: A portion of fees are burned<br/>
+        ⚡ Utility: Network fees, agent staking, governance
+      </div>
+      <p>Token utility breakdown:</p>
+      <ul>
+        <li><span class="tag tag-cyan">Network Fees</span> — Pay for Intercom sidechain operations</li>
+        <li><span class="tag tag-purple">Agent Staking</span> — Stake TNK to run validator/agent nodes</li>
+        <li><span class="tag tag-orange">Governance</span> — Vote on protocol upgrades and parameters</li>
+        <li><span class="tag tag-cyan">Incentives</span> — Rewarded to devs & contributors (like this fork!)</li>
+      </ul>
+      <div class="warn-box">⚠️ This info is for educational purposes. Always DYOR before investing.</div>
+    `
+  },
+  "what is intercom": {
+    title: "Intercom Protocol Explained",
+    html: `
+      <h3>⚡ Intercom — Internet of Agents</h3>
+      <p>Intercom is TRAC's P2P networking stack that enables autonomous agents to communicate, coordinate, and transact at high speed.</p>
+      <div class="highlight-box">
+        🔗 Two core layers:<br/>
+        &nbsp;&nbsp;1. Fast P2P Sidechannels — for real-time agent coordination<br/>
+        &nbsp;&nbsp;2. Replicated State Layer — for durable, shared decisions
+      </div>
+      <p>What makes Intercom unique:</p>
+      <ul>
+        <li>Agents can negotiate deals in milliseconds over sidechannels</li>
+        <li>Final settlement anchors to Bitcoin for security</li>
+        <li>Fully open — anyone can fork and build their own agent app</li>
+        <li>Supports custom skill files so AI agents know how to interact</li>
+      </ul>
+      <p style="margin-top:10px; color: var(--muted); font-size:13px;">Intercom is designed for the coming era of AI agents that autonomously manage wallets, negotiate trades, and coordinate across networks.</p>
+    `
+  },
+  "faq": {
+    title: "Frequently Asked Questions",
+    html: `
+      <h3>❓ TRAC FAQ</h3>
+      <div class="step">
+        <div class="step-num">Q</div>
+        <div><strong>Is TRAC built on Bitcoin?</strong><br/>
+        <span style="color:var(--muted); font-size:13px;">Yes, TRAC Core settles on Bitcoin. Intercom uses fast P2P sidechannels for speed.</span></div>
+      </div>
+      <div class="step">
+        <div class="step-num">Q</div>
+        <div><strong>Do I need BTC to use TRAC?</strong><br/>
+        <span style="color:var(--muted); font-size:13px;">Yes, small amounts of BTC are needed for transaction fees on the network.</span></div>
+      </div>
+      <div class="step">
+        <div class="step-num">Q</div>
+        <div><strong>What wallets are supported?</strong><br/>
+        <span style="color:var(--muted); font-size:13px;">Unisat, Xverse, OrdinalSafe, and other BTC wallets that support inscriptions.</span></div>
+      </div>
+      <div class="step">
+        <div class="step-num">Q</div>
+        <div><strong>How do I earn TNK?</strong><br/>
+        <span style="color:var(--muted); font-size:13px;">By running agents, contributing to the ecosystem, or building fork apps like this one!</span></div>
+      </div>
+      <div class="step">
+        <div class="step-num">Q</div>
+        <div><strong>Is TRAC open source?</strong><br/>
+        <span style="color:var(--muted); font-size:13px;">Yes! Fork Intercom on GitHub and build your own app. 500 TNK per eligible fork.</span></div>
+      </div>
+    `
+  },
+  "trac ecosystem": {
+    title: "TRAC Ecosystem Overview",
+    html: `
+      <h3>🌐 TRAC Ecosystem</h3>
+      <p>The TRAC ecosystem is growing rapidly with builders creating agent-powered apps on top of the Intercom protocol.</p>
+      <ul>
+        <li><span class="tag tag-cyan">Intercom</span> — Core P2P agent coordination protocol</li>
+        <li><span class="tag tag-purple">IntercomSwap</span> — Cross-chain atomic swaps (BTC ↔ USDT)</li>
+        <li><span class="tag tag-orange">AlphaSwarm</span> — Multi-agent market signal scanner</li>
+        <li><span class="tag tag-cyan">TracStamp</span> — P2P document timestamping</li>
+        <li><span class="tag tag-purple">Idea Inbox</span> — Shared P2P idea board</li>
+        <li><span class="tag tag-orange">TRAC Assistant</span> — This app! Onboarding for new users</li>
+      </ul>
+      <div class="highlight-box">
+        🚀 Building on Intercom? Fork the repo, build your app, add your TRAC address to README, and submit a PR to awesome-intercom to earn 500 TNK!
+      </div>
+    `
+  }
+};
+
+function getResponse(userMsg) {
+  const msg = userMsg.toLowerCase();
+  if (msg.includes('what is trac') || msg.includes('apa itu trac') || msg.includes('trac itu') || msg.includes('explain trac')) return KB['what is trac'];
+  if (msg.includes('wallet') || msg.includes('dompet') || msg.includes('setup') || msg.includes('install')) return KB['setup wallet'];
+  if (msg.includes('swap') || msg.includes('exchange') || msg.includes('tukar') || msg.includes('intercomswap')) return KB['how to swap'];
+  if (msg.includes('tokenomics') || msg.includes('tnk') || msg.includes('supply') || msg.includes('token') || msg.includes('price')) return KB['tokenomics'];
+  if (msg.includes('intercom') || msg.includes('protocol') || msg.includes('p2p') || msg.includes('agent')) return KB['what is intercom'];
+  if (msg.includes('faq') || msg.includes('frequently') || msg.includes('question') || msg.includes('pertanyaan')) return KB['faq'];
+  if (msg.includes('ecosystem') || msg.includes('ekosistem') || msg.includes('project') || msg.includes('apps')) return KB['trac ecosystem'];
+  if (msg.includes('hello') || msg.includes('hi') || msg.includes('halo') || msg.includes('hey')) {
+    return { title: 'Hello!', html: '<p>👋 Hey there! I\'m your TRAC Onboarding Assistant. Ask me about:</p><ul><li>What TRAC is and how it works</li><li>Setting up your wallet</li><li>How to use IntercomSwap</li><li>TNK tokenomics</li><li>The TRAC ecosystem</li></ul><p style="margin-top:8px">Or just click one of the topic chips above to get started!</p>' };
+  }
+  return { title: 'TRAC Assistant', html: `<p>I can help you learn about TRAC! Here are some topics I know well:</p><ul><li><strong>What is TRAC</strong> — the core protocol</li><li><strong>Wallet Setup</strong> — step-by-step guide</li><li><strong>How to Swap</strong> — using IntercomSwap</li><li><strong>Tokenomics</strong> — TNK supply & utility</li><li><strong>Intercom Protocol</strong> — how it works</li><li><strong>FAQ</strong> — common questions</li></ul><p style="margin-top:8px; color:var(--muted); font-size:13px;">Try asking: "What is TRAC?" or "How do I setup a wallet?"</p>` };
+}
+
+function addMessage(role, content, isHTML = false) {
+  const chat = document.getElementById('chat');
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+
+  const avatarLabel = role === 'bot' ? 'T' : 'U';
+  const avatarClass = role === 'bot' ? 'bot-avatar' : 'user-avatar';
+
+  div.innerHTML = `
+    <div class="msg-avatar ${avatarClass}">${avatarLabel}</div>
+    <div class="bubble">${isHTML ? content : `<p>${content}</p>`}</div>
+  `;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+function showTyping() {
+  const chat = document.getElementById('chat');
+  const div = document.createElement('div');
+  div.className = 'typing';
+  div.id = 'typing';
+  div.innerHTML = `
+    <div class="msg-avatar bot-avatar">T</div>
+    <div class="typing-dots"><span></span><span></span><span></span></div>
+  `;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function removeTyping() {
+  const t = document.getElementById('typing');
+  if (t) t.remove();
+}
+
+function sendMessage() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text) return;
+
+  addMessage('user', text);
+  input.value = '';
+  autoResize(input);
+  showTyping();
+
+  setTimeout(() => {
+    removeTyping();
+    const resp = getResponse(text);
+    addMessage('bot', resp.html, true);
+  }, 700 + Math.random() * 500);
+}
+
+function askTopic(topic) {
+  const input = document.getElementById('input');
+  input.value = topic;
+  sendMessage();
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+</script>
+</body>
+</html>
